@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>D3 Bar Chart</title>
+    <script src="https://d3js.org/d3.v6.min.js"></script>
+    <style>
+        /* Dropdown styling */
+        #department-select {
+            font-family: Arial, sans-serif;
+            font-size: 16px;
+            padding: 8px;
+            border: 2px solid #ccc;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+            color: #333;
+            cursor: pointer;
+            transition: border-color 0.3s ease;
+        }
+
+        #department-select:hover {
+            border-color: #666;
+        }
+
+        #department-select:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 5px rgba(0, 123, 255, 0.5);
+        }
+
+        /* Tooltip styling */
+        .tooltip {
+            position: absolute;
+            text-align: center;
+            padding: 10px;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            border-radius: 5px;
+            pointer-events: none;
+            visibility: hidden;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+        }
+
+        /* Bar styling */
+        .bar {
+            fill: steelblue;
+            transition: fill 0.3s ease;
+        }
+
+        .bar:hover {
+            fill: orange;
+        }
+
+        /* Axis styling */
+        .axis-label {
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Top 5 Spending Categories by Department</h1>
+
+    <!-- Department selection dropdown -->
+    <select id="department-select">
+        <option value="">Loading departments...</option>
+    </select>
+
+    <!-- Chart container -->
+    <svg width="800" height="500"></svg>
+
+    <!-- Tooltip -->
+    <div class="tooltip" id="tooltip"></div>
+
+    <script>
+        // Set up SVG dimensions and margins
+        const margin = { top: 80, right: 30, bottom: 100, left: 80 };
+        const width = 800 - margin.left - margin.right;
+        const height = 500 - margin.top - margin.bottom;
+
+        // Append SVG element
+        const svg = d3.select('svg')
+            .attr('width', width + margin.left + margin.right)
+            .attr('height', height + margin.top + margin.bottom)
+            .append('g')
+            .attr('transform', `translate(${margin.left},${margin.top})`);
+
+        // Set up scales
+        const x = d3.scaleBand().range([0, width]).padding(0.1);
+        const y = d3.scaleLinear().range([height, 0]);
+
+        // Append axes
+        const xAxis = svg.append('g')
+            .attr('transform', `translate(0,${height})`)
+            .attr('class', 'axis-label');
+
+        const yAxis = svg.append('g')
+            .attr('class', 'axis-label');
+
+        // Append chart title
+        const chartTitle = svg.append('text')
+            .attr('x', width / 2)
+            .attr('y', -40)
+            .attr('text-anchor', 'middle')
+            .style('font-size', '18px')
+            .style('font-weight', 'bold');
+
+        // Helper function to format numbers
+        function formatNumber(value) {
+            if (value >= 1e9) {
+                return `$${(value / 1e9).toFixed(1)} billion`;
+            } else if (value >= 1e6) {
+                return `$${(value / 1e6).toFixed(1)} million`;
+            } else if (value >= 1e3) {
+                return `$${(value / 1e3).toFixed(1)}k`;
+            } else {
+                return `$${value.toLocaleString()}`;
+            }
+        }
+
+        function wrapText(text, width) {
+            text.each(function() {
+                const text = d3.select(this);
+                const words = text.text().split(/\s+/).reverse();
+                let word;
+                let line = [];
+                let lineNumber = 0;
+                const lineHeight = 1.1; // Adjust this for line spacing
+                const y = text.attr("y");
+                const dy = parseFloat(text.attr("dy"));
+                let tspan = text.text(null).append("tspan")
+                    .attr("x", 0)
+                    .attr("y", y)
+                    .attr("dy", dy + "em");
+
+                while (word = words.pop()) {
+                    line.push(word);
+                    tspan.text(line.join(" "));
+                    if (tspan.node().getComputedTextLength() > width) {
+                        line.pop();
+                        tspan.text(line.join(" "));
+                        line = [word];
+                        tspan = text.append("tspan")
+                            .attr("x", 0)
+                            .attr("y", y)
+                            .attr("dy", `${++lineNumber * lineHeight + dy}em`)
+                            .text(word);
+                    }
+                }
+            });
+        }
+
+        // Fetch departments and populate the dropdown
+        fetch('/departments')
+            .then(response => response.json())
+            .then(data => {
+                const select = document.getElementById("department-select");
+                select.innerHTML = data.map(d => `
+                    <option value="${d.name}">${d.name} (${formatNumber(d.total_spend)})</option>
+                `).join("");
+
+                // Trigger the chart update for the first department
+                if (data.length > 0) {
+                    fetchData();
+                }
+            });
+
+        // Fetch data and update the chart when a new department is selected
+        document.getElementById("department-select").addEventListener("change", fetchData);
+
+        function fetchData() {
+            const department = document.getElementById("department-select").value;
+            
+            // Fetch the data from the Flask server
+            fetch(`/data?department=${department}`)
+                .then(response => response.json())
+                .then(data => {
+                    data.forEach(d => {
+                        d.total = parseFloat(d.total); // Convert string to number
+                    });
+
+                    if (data.length === 0) {
+                        alert("No data available for the selected department.");
+                        return;
+                    }
+
+                    // Update chart title
+                    chartTitle.text(`Top 5 Spending Categories for ${department}`);
+
+                    // Update scales with a buffer for the y-axis
+                    x.domain(data.map(d => d.category));
+                    const maxValue = d3.max(data, d => d.total);
+                    y.domain([0, maxValue * 1.1]); // Add 10% buffer
+
+                    // Update axes
+                    xAxis.call(d3.axisBottom(x))
+                        .selectAll('text')
+                        .style('text-anchor', 'middle') // Center-align text
+                        .attr('dy', '0.5em') // Adjust vertical position
+                        .call(wrapText, x.bandwidth()); // Wrap text within the band width
+
+                    yAxis.call(d3.axisLeft(y).ticks(5).tickFormat(d => formatNumber(d)));
+
+                    // Bind data to bars
+                    const bars = svg.selectAll('.bar')
+                        .data(data, d => d.category);
+
+                    // Remove old bars
+                    bars.exit().remove();
+
+                    // Add new bars
+                    bars.enter()
+                        .append('rect')
+                        .attr('class', 'bar')
+                        .attr('x', d => x(d.category))
+                        .attr('width', x.bandwidth())
+                        .attr('y', height)
+                        .attr('height', 0)
+                        .merge(bars)
+                        .transition()
+                        .duration(500)
+                        .attr('x', d => x(d.category))
+                        .attr('y', d => y(d.total))
+                        .attr('height', d => height - y(d.total));
+
+                    // Add tooltip
+                    const tooltip = d3.select("#tooltip");
+
+                    svg.selectAll('.bar')
+                        .on("mouseover", function(event, d) {
+                            tooltip.style("visibility", "visible")
+                                   .html(`<strong>${d.category}</strong><br>${formatNumber(d.total)}`)
+                                   .style("left", `${event.pageX + 10}px`)
+                                   .style("top", `${event.pageY - 28}px`);
+                        })
+                        .on("mousemove", function(event) {
+                            tooltip.style("left", `${event.pageX + 10}px`)
+                                   .style("top", `${event.pageY - 28}px`);
+                        })
+                        .on("mouseout", function() {
+                            tooltip.style("visibility", "hidden");
+                        });
+                });
+        }
+    </script>
+</body>
+</html>
